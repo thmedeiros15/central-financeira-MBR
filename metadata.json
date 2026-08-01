@@ -1,0 +1,6 @@
+{
+  "name": "MBR TRACKER",
+  "description": "Sistema completo de inteligência e gestão financeira pessoal e empresarial MBR TRACKER.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
