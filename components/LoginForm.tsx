@@ -15,13 +15,13 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
     setIsLoading(true);
 
-    setTimeout(() => {
-      const result = authService.login(email, password);
+    try {
+      const result = await authService.login(email, password);
       setIsLoading(false);
 
       if (result.success && result.session) {
@@ -29,9 +29,11 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
       } else {
         setErrorMsg(result.message || 'Falha na autenticação. Verifique os dados fornecidos.');
       }
-    }, 400); // Pequeno atraso simulado para feedback suave
+    } catch (err: any) {
+      setIsLoading(false);
+      setErrorMsg('Ocorreu um erro inesperado na autenticação.');
+    }
   };
-
 
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center p-4 relative overflow-hidden font-sans">

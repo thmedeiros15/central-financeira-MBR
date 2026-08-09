@@ -11,12 +11,23 @@ import { MbrLogo } from './components/MbrLogo';
 import { LoginForm } from './components/LoginForm';
 import { AdminPanel } from './components/AdminPanel';
 import { authService } from './services/authService';
+import { financialService } from './services/financialService';
 import { analyzeFinancials } from './services/geminiService';
 import { getLocalDateParts } from './utils/dateUtils';
 
 const App: React.FC = () => {
   // Sessão do usuário logado
-  const [authSession, setAuthSession] = useState<AuthSession | null>(() => authService.getCurrentSession());
+  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+
+  useEffect(() => {
+    async function initSession() {
+      const session = await authService.getCurrentSession();
+      setAuthSession(session);
+      setIsAuthLoading(false);
+    }
+    initSession();
+  }, []);
 
   const currentUserId = authSession?.user?.id || null;
   const isUserAdmin = authSession?.user?.role === 'ADMIN';
@@ -39,11 +50,11 @@ const App: React.FC = () => {
     return result;
   };
 
-  const normalizeProLaboreTransactions = (txs: Transaction[]) => {
+  const normalizeProLaboreTransactions = (txs: Transaction[]): Transaction[] => {
     return txs.map(t => {
       const descLower = (t.description || '').toLowerCase();
       if (t.module === 'PERSONAL' && (t.description.startsWith('Pró-labore') || descLower.includes('pro-labore') || descLower.includes('prolabore') || descLower.includes('pró-labore'))) {
-        return { ...t, category: 'Pró-labore', type: 'INCOME' };
+        return { ...t, category: 'Pró-labore', type: 'INCOME' as TransactionType };
       }
       return t;
     });
@@ -113,45 +124,64 @@ const App: React.FC = () => {
     return { personal: true, business: true };
   });
 
-  // Re-hidratar dados do usuário quando mudar a sessão
+  // Re-hidratar dados do usuário quando mudar a sessão ou logar
   useEffect(() => {
     if (!currentUserId || isUserAdmin) return;
 
-    const savedTx = localStorage.getItem(`mbr_usr_${currentUserId}_transactions`);
-    if (savedTx) {
-      try { setTransactions(normalizeProLaboreTransactions(JSON.parse(savedTx))); } catch (e) { setTransactions(INITIAL_TRANSACTIONS); }
-    } else {
-      const legacyTx = localStorage.getItem('mbr_transactions');
-      setTransactions(legacyTx ? normalizeProLaboreTransactions(JSON.parse(legacyTx)) : INITIAL_TRANSACTIONS);
+    let isMounted = true;
+
+    async function loadUserData() {
+      // 1. Carregar Transações do Supabase
+      const remoteTx = await financialService.getTransactions(currentUserId!);
+      if (isMounted) {
+        if (remoteTx.length > 0) {
+          setTransactions(normalizeProLaboreTransactions(remoteTx));
+        } else {
+          // Tentativa de carregar dados remanescentes do localStorage para migração inicial
+          const savedTx = localStorage.getItem(`mbr_usr_${currentUserId}_transactions`);
+          if (savedTx) {
+            try {
+              const parsed = normalizeProLaboreTransactions(JSON.parse(savedTx));
+              setTransactions(parsed);
+              // Migrar em lote para o Supabase
+              parsed.forEach(tx => financialService.upsertTransaction(currentUserId!, tx));
+            } catch (e) { setTransactions(INITIAL_TRANSACTIONS); }
+          }
+        }
+      }
+
+      // 2. Carregar Categorias Pessoais do Supabase
+      const remotePersonalCats = await financialService.getCategories(currentUserId!, 'PERSONAL');
+      if (isMounted && remotePersonalCats.length > 0) {
+        setPersonalCats(ensureSalarioCategory(remotePersonalCats));
+      }
+
+      // 3. Carregar Categorias Empresariais do Supabase
+      const remoteBusinessCats = await financialService.getCategories(currentUserId!, 'BUSINESS');
+      if (isMounted && remoteBusinessCats.length > 0) {
+        setBusinessCats(remoteBusinessCats);
+      }
+
+      // 4. Carregar Empresas do Supabase
+      const remoteCompanies = await financialService.getCompanies(currentUserId!);
+      if (isMounted && remoteCompanies.length > 0) {
+        setCompanies(remoteCompanies);
+      }
+
+      // 5. Carregar Configurações (Módulos e Séries Excluídas)
+      const remoteSettings = await financialService.getUserSettings(currentUserId!);
+      if (isMounted && remoteSettings) {
+        if (remoteSettings.enabled_modules) setEnabledModules(remoteSettings.enabled_modules);
+        if (remoteSettings.deleted_fixed_single) setDeletedFixedSingle(remoteSettings.deleted_fixed_single);
+        if (remoteSettings.canceled_fixed_series) setCanceledFixedSeries(remoteSettings.canceled_fixed_series);
+        if (remoteSettings.canceled_installment_series) setCanceledInstallmentSeries(remoteSettings.canceled_installment_series);
+        if (remoteSettings.deleted_installment_slots) setDeletedInstallmentSlots(remoteSettings.deleted_installment_slots);
+      }
     }
 
-    const savedPersonalCats = localStorage.getItem(`mbr_usr_${currentUserId}_personal_cats`);
-    setPersonalCats(savedPersonalCats ? ensureSalarioCategory(JSON.parse(savedPersonalCats)) : PERSONAL_CATEGORIES);
+    loadUserData();
 
-    const savedBusinessCats = localStorage.getItem(`mbr_usr_${currentUserId}_business_cats`);
-    setBusinessCats(savedBusinessCats ? JSON.parse(savedBusinessCats) : BUSINESS_EXPENSE_CATEGORIES);
-
-    const savedDeletedFixed = localStorage.getItem(`mbr_usr_${currentUserId}_deleted_fixed_single`);
-    setDeletedFixedSingle(savedDeletedFixed ? JSON.parse(savedDeletedFixed) : []);
-
-    const savedCanceledSeries = localStorage.getItem(`mbr_usr_${currentUserId}_canceled_fixed_series`);
-    setCanceledFixedSeries(savedCanceledSeries ? JSON.parse(savedCanceledSeries) : []);
-
-    const savedCanceledInst = localStorage.getItem(`mbr_usr_${currentUserId}_canceled_installment_series`);
-    setCanceledInstallmentSeries(savedCanceledInst ? JSON.parse(savedCanceledInst) : []);
-
-    const savedDeletedInstSlots = localStorage.getItem(`mbr_usr_${currentUserId}_deleted_installment_slots`);
-    setDeletedInstallmentSlots(savedDeletedInstSlots ? JSON.parse(savedDeletedInstSlots) : []);
-
-    const savedCompanies = localStorage.getItem(`mbr_usr_${currentUserId}_companies`);
-    setCompanies(savedCompanies ? JSON.parse(savedCompanies) : []);
-
-    const savedModules = localStorage.getItem(`mbr_usr_${currentUserId}_enabled_modules`);
-    if (savedModules) {
-      try { setEnabledModules(JSON.parse(savedModules)); } catch (e) { setEnabledModules({ personal: true, business: true }); }
-    } else {
-      setEnabledModules({ personal: true, business: true });
-    }
+    return () => { isMounted = false; };
   }, [currentUserId, isUserAdmin]);
 
   // Efeitos para persistir dados isolados por usuário
@@ -307,7 +337,7 @@ const App: React.FC = () => {
     }
   };
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!authSession) return;
     setProfileMsg(null);
@@ -317,29 +347,13 @@ const App: React.FC = () => {
       return;
     }
 
-    const nameResult = authService.updateUser(authSession.user.id, { name: editName.trim() });
+    const nameResult = await authService.updateUser(authSession.user.id, { name: editName.trim() });
     if (!nameResult.success) {
       setProfileMsg({ type: 'error', text: nameResult.message || 'Erro ao atualizar nome.' });
       return;
     }
 
-    if (editPassword) {
-      if (editPassword.length < 4) {
-        setProfileMsg({ type: 'error', text: 'A nova senha deve ter pelo menos 4 caracteres.' });
-        return;
-      }
-      if (editPassword !== editPasswordConfirm) {
-        setProfileMsg({ type: 'error', text: 'As senhas não coincidem.' });
-        return;
-      }
-      const pwdResult = authService.resetUserPassword(authSession.user.id, editPassword);
-      if (!pwdResult.success) {
-        setProfileMsg({ type: 'error', text: pwdResult.message || 'Erro ao atualizar senha.' });
-        return;
-      }
-    }
-
-    const freshSession = authService.getCurrentSession();
+    const freshSession = await authService.getCurrentSession();
     if (freshSession) {
       setAuthSession(freshSession);
     }
@@ -1133,6 +1147,15 @@ const App: React.FC = () => {
         );
     }
   };
+
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center p-4">
+        <div className="w-12 h-12 border-4 border-[#F26522] border-t-transparent rounded-full animate-spin"></div>
+        <p className="text-white text-xs font-bold uppercase tracking-widest mt-4">Carregando MBR Tracker...</p>
+      </div>
+    );
+  }
 
   if (!authSession) {
     return <LoginForm onLoginSuccess={(session) => setAuthSession(session)} />;

@@ -1,8 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Users, UserPlus, Search, Shield, ShieldAlert, CheckCircle2, XCircle, 
-  Edit3, KeyRound, Trash2, Calendar, Clock, RefreshCw, UserCheck, Lock, Mail, User as UserIcon,
-  Eye, EyeOff, Copy
+  Edit3, Trash2, Calendar, Clock, RefreshCw, UserCheck
 } from 'lucide-react';
 import { User, UserRole, UserStatus } from '../types';
 import { authService } from '../services/authService';
@@ -12,7 +11,8 @@ interface AdminPanelProps {
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
-  const [users, setUsers] = useState<User[]>(() => authService.getUsers());
+  const [users, setUsers] = useState<User[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<'ALL' | UserRole>('ALL');
   const [statusFilter, setStatusFilter] = useState<'ALL' | UserStatus>('ALL');
@@ -20,7 +20,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
   // Modais State
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
-  const [resetPassUser, setResetPassUser] = useState<User | null>(null);
   const [deletingUser, setDeletingUser] = useState<User | null>(null);
 
   // Formulário de Criação
@@ -33,20 +32,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
   // Formulário de Edição
   const [editName, setEditName] = useState('');
   const [editEmail, setEditEmail] = useState('');
-  const [editPassword, setEditPassword] = useState('');
-  const [showEditPassword, setShowEditPassword] = useState(false);
   const [editRole, setEditRole] = useState<UserRole>('USER');
   const [editStatus, setEditStatus] = useState<UserStatus>('ACTIVE');
-
-  // Formulário de Reset de Senha
-  const [resetPassInput, setResetPassInput] = useState('');
 
   // Mensagens de Feedback
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  const refreshUserList = () => {
-    setUsers(authService.getUsers());
+  const refreshUserList = async () => {
+    setIsLoading(true);
+    const fetched = await authService.getUsers();
+    setUsers(fetched);
+    setIsLoading(false);
   };
+
+  useEffect(() => {
+    refreshUserList();
+  }, []);
 
   const showNotification = (type: 'success' | 'error', message: string) => {
     setFeedback({ type, message });
@@ -78,9 +79,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
   }, [users, searchQuery, roleFilter, statusFilter]);
 
   // Handlers
-  const handleCreateUser = (e: React.FormEvent) => {
+  const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    const result = authService.createUser({
+    const result = await authService.createUser({
       name: newName,
       email: newEmail,
       password: newPassword,
@@ -106,22 +107,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
     setEditingUser(user);
     setEditName(user.name);
     setEditEmail(user.email);
-    setEditPassword(user.plainPassword || '');
-    setShowEditPassword(false);
     setEditRole(user.role);
     setEditStatus(user.status);
   };
 
-  const handleSaveEdit = (e: React.FormEvent) => {
+  const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingUser) return;
 
-    const result = authService.updateUser(editingUser.id, {
+    const result = await authService.updateUser(editingUser.id, {
       name: editName,
       email: editEmail,
       role: editRole,
-      status: editStatus,
-      password: editPassword
+      status: editStatus
     });
 
     if (result.success) {
@@ -133,9 +131,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
     }
   };
 
-  const handleToggleStatus = (user: User) => {
+  const handleToggleStatus = async (user: User) => {
     const nextStatus: UserStatus = user.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
-    const result = authService.updateUser(user.id, { status: nextStatus });
+    const result = await authService.updateUser(user.id, { status: nextStatus });
 
     if (result.success) {
       showNotification('success', `Status de ${user.name} alterado para ${nextStatus === 'ACTIVE' ? 'Ativo' : 'Inativo'}.`);
@@ -145,24 +143,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
     }
   };
 
-  const handleResetPassword = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!resetPassUser) return;
-
-    const result = authService.resetUserPassword(resetPassUser.id, resetPassInput);
-    if (result.success) {
-      showNotification('success', `Nova senha gravada para ${resetPassUser.name}!`);
-      setResetPassUser(null);
-      setResetPassInput('');
-    } else {
-      showNotification('error', result.message || 'Erro ao redefinir senha.');
-    }
-  };
-
-  const handleDeleteUser = () => {
+  const handleDeleteUser = async () => {
     if (!deletingUser) return;
 
-    const result = authService.deleteUser(deletingUser.id, currentAdmin.id);
+    const result = await authService.deleteUser(deletingUser.id, currentAdmin.id);
     if (result.success) {
       showNotification('success', result.message || 'Usuário removido do sistema.');
       setDeletingUser(null);
@@ -237,7 +221,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
 
       {/* Cards com Métricas dos Usuários */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-        
         <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-4 rounded-2xl shadow-xs">
           <div className="flex items-center justify-between text-slate-400 mb-2">
             <span className="text-[10px] font-black uppercase tracking-wider">Total Registrados</span>
@@ -273,13 +256,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
           <p className="text-2xl font-black text-amber-600 dark:text-amber-400">{stats.admins}</p>
           <span className="text-[10px] font-bold text-slate-400 uppercase">Gestores de usuários</span>
         </div>
-
       </div>
 
       {/* Barra de Filtro e Pesquisa */}
       <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-4 rounded-2xl shadow-xs space-y-3 md:space-y-0 md:flex md:items-center md:justify-between md:gap-4">
-        
-        {/* Pesquisa */}
         <div className="relative flex-1">
           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
             <Search className="w-4 h-4" />
@@ -293,9 +273,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
           />
         </div>
 
-        {/* Filtros */}
         <div className="flex flex-wrap items-center gap-2">
-          
           <div className="flex items-center gap-1 bg-slate-50 dark:bg-slate-800/80 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
             <span className="text-[10px] font-black text-slate-400 uppercase px-2">Nível:</span>
             <button
@@ -339,9 +317,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
               Inativos
             </button>
           </div>
-
         </div>
-
       </div>
 
       {/* Tabela de Usuários */}
@@ -359,7 +335,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-xs font-bold">
-              {filteredUsers.length === 0 ? (
+              {isLoading ? (
+                <tr>
+                  <td colSpan={6} className="p-8 text-center text-slate-400 font-semibold">
+                    Carregando usuários do Supabase...
+                  </td>
+                </tr>
+              ) : filteredUsers.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="p-8 text-center text-slate-400 font-semibold">
                     Nenhum usuário encontrado com os filtros aplicados.
@@ -439,15 +421,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
                             <Edit3 className="w-4 h-4" />
                           </button>
 
-                          {/* Resetar Senha */}
-                          <button
-                            onClick={() => setResetPassUser(u)}
-                            title="Redefinir senha"
-                            className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-amber-600 dark:text-amber-400 transition-colors cursor-pointer"
-                          >
-                            <KeyRound className="w-4 h-4" />
-                          </button>
-
                           {/* Alterar Status */}
                           <button
                             onClick={() => handleToggleStatus(u)}
@@ -521,10 +494,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
                 <input
                   type="password"
                   required
-                  minLength={4}
+                  minLength={6}
                   value={newPassword}
                   onChange={e => setNewPassword(e.target.value)}
-                  placeholder="Mínimo 4 caracteres"
+                  placeholder="Mínimo 6 caracteres"
                   className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#F26522]"
                 />
               </div>
@@ -609,55 +582,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
                 />
               </div>
 
-              <div>
-                <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Senha de Acesso</label>
-                <div className="relative">
-                  <input
-                    type={showEditPassword ? 'text' : 'password'}
-                    value={editPassword}
-                    onChange={e => setEditPassword(e.target.value)}
-                    placeholder="Digite a nova senha ou mantenha a atual"
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl pl-3 pr-10 py-2.5 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#F26522]"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowEditPassword(!showEditPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
-                    title={showEditPassword ? "Ocultar senha" : "Ver senha"}
-                  >
-                    {showEditPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-
-                {/* Caixa informativa com a senha de acesso salva do perfil */}
-                <div className="mt-2.5 p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center justify-between text-xs font-bold text-amber-700 dark:text-amber-400">
-                  <div className="flex items-center gap-2 truncate">
-                    <KeyRound className="w-4 h-4 shrink-0 text-amber-500" />
-                    <div className="truncate">
-                      <p className="text-[9px] font-black uppercase text-amber-600/80 dark:text-amber-400/80">Senha Salva no Perfil</p>
-                      <p className="font-mono text-xs font-black text-slate-900 dark:text-white truncate">
-                        {editingUser.plainPassword || editPassword || 'Não registrada'}
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const passToCopy = editingUser.plainPassword || editPassword;
-                      if (passToCopy) {
-                        navigator.clipboard.writeText(passToCopy);
-                        showNotification('success', 'Senha copiada para a área de transferência!');
-                      }
-                    }}
-                    className="text-[10px] uppercase font-black px-2.5 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-800 dark:text-amber-300 rounded-lg shrink-0 transition-colors cursor-pointer flex items-center gap-1"
-                    title="Copiar Senha"
-                  >
-                    <Copy className="w-3 h-3" />
-                    <span>Copiar</span>
-                  </button>
-                </div>
-              </div>
-
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Nível</label>
@@ -697,62 +621,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
                   className="w-1/2 bg-[#F26522] hover:bg-[#D94100] text-white py-3 rounded-xl font-extrabold text-xs uppercase shadow-md"
                 >
                   Atualizar
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: Redefinir Senha */}
-      {resetPassUser && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[110] flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 w-full max-w-sm rounded-3xl shadow-2xl overflow-hidden">
-            <div className="bg-slate-950 px-5 py-4 text-white flex justify-between items-center border-b border-slate-800">
-              <h3 className="font-black text-sm uppercase flex items-center gap-2">
-                <KeyRound className="w-4 h-4 text-amber-500" /> Redefinir Senha
-              </h3>
-              <button onClick={() => setResetPassUser(null)} className="text-slate-400 hover:text-white">✕</button>
-            </div>
-
-            <form onSubmit={handleResetPassword} className="p-5 space-y-4">
-              <p className="text-xs font-semibold text-slate-600 dark:text-slate-400">
-                Digite a nova senha de acesso para o usuário <strong className="text-slate-900 dark:text-white">{resetPassUser.name}</strong>:
-              </p>
-
-              {resetPassUser.plainPassword && (
-                <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center justify-between text-xs font-bold text-amber-700 dark:text-amber-400">
-                  <span className="text-[10px] font-black uppercase text-amber-600/80">Senha atual registrada:</span>
-                  <span className="font-mono text-xs font-black text-slate-900 dark:text-white bg-amber-500/20 px-2 py-0.5 rounded">{resetPassUser.plainPassword}</span>
-                </div>
-              )}
-
-              <div>
-                <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Nova Senha</label>
-                <input
-                  type="password"
-                  required
-                  minLength={4}
-                  value={resetPassInput}
-                  onChange={e => setResetPassInput(e.target.value)}
-                  placeholder="Mínimo 4 caracteres"
-                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-                />
-              </div>
-
-              <div className="pt-2 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setResetPassUser(null)}
-                  className="w-1/2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 py-2.5 rounded-xl font-extrabold text-xs uppercase"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="w-1/2 bg-amber-500 hover:bg-amber-600 text-white py-2.5 rounded-xl font-extrabold text-xs uppercase shadow-md"
-                >
-                  Gravar Senha
                 </button>
               </div>
             </form>
