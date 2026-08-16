@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Users, UserPlus, Search, Shield, ShieldAlert, CheckCircle2, XCircle, 
-  Edit3, Trash2, Calendar, Clock, RefreshCw, UserCheck
+  Edit3, Trash2, Calendar, Clock, RefreshCw, UserCheck, Lock, Eye, EyeOff
 } from 'lucide-react';
 import { User, UserRole, UserStatus } from '../types';
 import { authService } from '../services/authService';
@@ -34,6 +34,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
   const [editEmail, setEditEmail] = useState('');
   const [editRole, setEditRole] = useState<UserRole>('USER');
   const [editStatus, setEditStatus] = useState<UserStatus>('ACTIVE');
+  const [editPassword, setEditPassword] = useState('');
+  const [showEditPassword, setShowEditPassword] = useState(false);
 
   // Mensagens de Feedback
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -109,22 +111,34 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
     setEditEmail(user.email);
     setEditRole(user.role);
     setEditStatus(user.status);
+    setEditPassword('');
+    setShowEditPassword(false);
   };
 
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingUser) return;
 
+    if (editPassword.trim() && editPassword.trim().length < 6) {
+      showNotification('error', 'A nova senha deve possuir pelo menos 6 caracteres.');
+      return;
+    }
+
     const result = await authService.updateUser(editingUser.id, {
       name: editName,
       email: editEmail,
       role: editRole,
-      status: editStatus
+      status: editStatus,
+      password: editPassword.trim() || undefined
     });
 
     if (result.success) {
-      showNotification('success', `Dados do usuário "${editName}" atualizados!`);
+      showNotification('success', editPassword.trim()
+        ? `Dados e nova senha de "${editName}" atualizados!`
+        : `Dados do usuário "${editName}" atualizados!`
+      );
       setEditingUser(null);
+      setEditPassword('');
       refreshUserList();
     } else {
       showNotification('error', result.message || 'Erro ao atualizar usuário.');
@@ -580,6 +594,30 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
                   onChange={e => setEditEmail(e.target.value)}
                   className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#F26522]"
                 />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase text-slate-400 mb-1 flex items-center justify-between">
+                  <span>Nova Senha (Opcional)</span>
+                  <span className="text-[9px] text-slate-400 font-normal normal-case">Mínimo 6 caracteres</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type={showEditPassword ? "text" : "password"}
+                    value={editPassword}
+                    onChange={e => setEditPassword(e.target.value)}
+                    placeholder="Deixe em branco para manter a senha atual"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl pl-3 pr-10 py-2.5 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#F26522]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowEditPassword(!showEditPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 p-1"
+                    title={showEditPassword ? "Ocultar senha" : "Exibir senha"}
+                  >
+                    {showEditPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">

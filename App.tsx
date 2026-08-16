@@ -60,12 +60,25 @@ const App: React.FC = () => {
     });
   };
 
+  const [isLoadingUserData, setIsLoadingUserData] = useState(false);
+
+  const resetUserDataState = useCallback(() => {
+    setTransactions([]);
+    setPersonalCats(PERSONAL_CATEGORIES);
+    setBusinessCats(BUSINESS_EXPENSE_CATEGORIES);
+    setCompanies([]);
+    setDeletedFixedSingle([]);
+    setCanceledFixedSeries([]);
+    setCanceledInstallmentSeries([]);
+    setDeletedInstallmentSlots([]);
+    setEnabledModules({ personal: true, business: true });
+    setAnalysisResult(null);
+  }, []);
+
   const [transactions, setTransactions] = useState<Transaction[]>(() => {
     if (!currentUserId || isUserAdmin) return [];
     const saved = localStorage.getItem(`mbr_usr_${currentUserId}_transactions`);
-    if (saved) return normalizeProLaboreTransactions(JSON.parse(saved));
-    const legacy = localStorage.getItem('mbr_transactions');
-    return legacy ? normalizeProLaboreTransactions(JSON.parse(legacy)) : INITIAL_TRANSACTIONS;
+    return saved ? normalizeProLaboreTransactions(JSON.parse(saved)) : [];
   });
 
   const [personalCats, setPersonalCats] = useState<string[]>(() => {
@@ -126,121 +139,153 @@ const App: React.FC = () => {
 
   // Re-hidratar dados do usuário quando mudar a sessão ou logar
   useEffect(() => {
-    if (!currentUserId || isUserAdmin) return;
+    if (!currentUserId || isUserAdmin) {
+      resetUserDataState();
+      setIsLoadingUserData(false);
+      return;
+    }
 
     let isMounted = true;
+    setIsLoadingUserData(true);
+    // Limpar imediatamente os dados de sessões passadas para evitar colisão visual ou de cache
+    resetUserDataState();
 
     async function loadUserData() {
-      // 1. Carregar Transações do Supabase
-      const remoteTx = await financialService.getTransactions(currentUserId!);
-      if (isMounted) {
-        if (remoteTx.length > 0) {
+      try {
+        // 1. Carregar Transações do Supabase
+        const remoteTx = await financialService.getTransactions(currentUserId!);
+        if (!isMounted) return;
+
+        if (remoteTx && remoteTx.length > 0) {
           setTransactions(normalizeProLaboreTransactions(remoteTx));
         } else {
-          // Tentativa de carregar dados remanescentes do localStorage para migração inicial
+          // Checar se há dados locais do próprio usuário para resiliência/migração
           const savedTx = localStorage.getItem(`mbr_usr_${currentUserId}_transactions`);
           if (savedTx) {
             try {
               const parsed = normalizeProLaboreTransactions(JSON.parse(savedTx));
               setTransactions(parsed);
-              // Migrar em lote para o Supabase
               parsed.forEach(tx => financialService.upsertTransaction(currentUserId!, tx));
-            } catch (e) { setTransactions(INITIAL_TRANSACTIONS); }
+            } catch (e) {
+              setTransactions([]);
+            }
+          } else {
+            // REGRA ABSOLUTA: Se o usuário tem zero registros, o estado DEVE ser uma lista vazia []
+            setTransactions([]);
           }
         }
-      }
 
-      // 2. Carregar Categorias Pessoais do Supabase
-      const remotePersonalCats = await financialService.getCategories(currentUserId!, 'PERSONAL');
-      if (isMounted && remotePersonalCats.length > 0) {
-        setPersonalCats(ensureSalarioCategory(remotePersonalCats));
-      }
+        // 2. Carregar Categorias Pessoais do Supabase
+        const remotePersonalCats = await financialService.getCategories(currentUserId!, 'PERSONAL');
+        if (!isMounted) return;
+        if (remotePersonalCats && remotePersonalCats.length > 0) {
+          setPersonalCats(ensureSalarioCategory(remotePersonalCats));
+        } else {
+          setPersonalCats(PERSONAL_CATEGORIES);
+        }
 
-      // 3. Carregar Categorias Empresariais do Supabase
-      const remoteBusinessCats = await financialService.getCategories(currentUserId!, 'BUSINESS');
-      if (isMounted && remoteBusinessCats.length > 0) {
-        setBusinessCats(remoteBusinessCats);
-      }
+        // 3. Carregar Categorias Empresariais do Supabase
+        const remoteBusinessCats = await financialService.getCategories(currentUserId!, 'BUSINESS');
+        if (!isMounted) return;
+        if (remoteBusinessCats && remoteBusinessCats.length > 0) {
+          setBusinessCats(remoteBusinessCats);
+        } else {
+          setBusinessCats(BUSINESS_EXPENSE_CATEGORIES);
+        }
 
-      // 4. Carregar Empresas do Supabase
-      const remoteCompanies = await financialService.getCompanies(currentUserId!);
-      if (isMounted && remoteCompanies.length > 0) {
-        setCompanies(remoteCompanies);
-      }
+        // 4. Carregar Empresas do Supabase
+        const remoteCompanies = await financialService.getCompanies(currentUserId!);
+        if (!isMounted) return;
+        setCompanies(remoteCompanies || []);
 
-      // 5. Carregar Configurações (Módulos e Séries Excluídas)
-      const remoteSettings = await financialService.getUserSettings(currentUserId!);
-      if (isMounted && remoteSettings) {
-        if (remoteSettings.enabled_modules) setEnabledModules(remoteSettings.enabled_modules);
-        if (remoteSettings.deleted_fixed_single) setDeletedFixedSingle(remoteSettings.deleted_fixed_single);
-        if (remoteSettings.canceled_fixed_series) setCanceledFixedSeries(remoteSettings.canceled_fixed_series);
-        if (remoteSettings.canceled_installment_series) setCanceledInstallmentSeries(remoteSettings.canceled_installment_series);
-        if (remoteSettings.deleted_installment_slots) setDeletedInstallmentSlots(remoteSettings.deleted_installment_slots);
+        // 5. Carregar Configurações (Módulos e Séries Excluídas)
+        const remoteSettings = await financialService.getUserSettings(currentUserId!);
+        if (!isMounted) return;
+        if (remoteSettings) {
+          if (remoteSettings.enabled_modules) setEnabledModules(remoteSettings.enabled_modules);
+          if (remoteSettings.deleted_fixed_single) setDeletedFixedSingle(remoteSettings.deleted_fixed_single);
+          if (remoteSettings.canceled_fixed_series) setCanceledFixedSeries(remoteSettings.canceled_fixed_series);
+          if (remoteSettings.canceled_installment_series) setCanceledInstallmentSeries(remoteSettings.canceled_installment_series);
+          if (remoteSettings.deleted_installment_slots) setDeletedInstallmentSlots(remoteSettings.deleted_installment_slots);
+        } else {
+          setEnabledModules({ personal: true, business: true });
+          setDeletedFixedSingle([]);
+          setCanceledFixedSeries([]);
+          setCanceledInstallmentSeries([]);
+          setDeletedInstallmentSlots([]);
+        }
+      } catch (e) {
+        console.error("Erro ao carregar dados do usuário no Supabase:", e);
+      } finally {
+        if (isMounted) {
+          setIsLoadingUserData(false);
+        }
       }
     }
 
     loadUserData();
 
     return () => { isMounted = false; };
-  }, [currentUserId, isUserAdmin]);
+  }, [currentUserId, isUserAdmin, resetUserDataState]);
 
-  // Efeitos para persistir dados isolados por usuário
+  // Efeitos para persistir dados isolados por usuário (SOMENTE após término do carregamento)
   useEffect(() => {
-    if (currentUserId && !isUserAdmin) {
+    if (currentUserId && !isUserAdmin && !isLoadingUserData) {
       localStorage.setItem(`mbr_usr_${currentUserId}_transactions`, JSON.stringify(transactions));
     }
-  }, [transactions, currentUserId, isUserAdmin]);
+  }, [transactions, currentUserId, isUserAdmin, isLoadingUserData]);
 
   useEffect(() => {
-    if (currentUserId && !isUserAdmin) {
+    if (currentUserId && !isUserAdmin && !isLoadingUserData) {
       localStorage.setItem(`mbr_usr_${currentUserId}_enabled_modules`, JSON.stringify(enabledModules));
     }
-  }, [enabledModules, currentUserId, isUserAdmin]);
+  }, [enabledModules, currentUserId, isUserAdmin, isLoadingUserData]);
 
   useEffect(() => {
-    if (currentUserId && !isUserAdmin) {
+    if (currentUserId && !isUserAdmin && !isLoadingUserData) {
       localStorage.setItem(`mbr_usr_${currentUserId}_personal_cats`, JSON.stringify(personalCats));
     }
-  }, [personalCats, currentUserId, isUserAdmin]);
+  }, [personalCats, currentUserId, isUserAdmin, isLoadingUserData]);
 
   useEffect(() => {
-    if (currentUserId && !isUserAdmin) {
+    if (currentUserId && !isUserAdmin && !isLoadingUserData) {
       localStorage.setItem(`mbr_usr_${currentUserId}_business_cats`, JSON.stringify(businessCats));
     }
-  }, [businessCats, currentUserId, isUserAdmin]);
+  }, [businessCats, currentUserId, isUserAdmin, isLoadingUserData]);
 
   useEffect(() => {
-    if (currentUserId && !isUserAdmin) {
+    if (currentUserId && !isUserAdmin && !isLoadingUserData) {
       localStorage.setItem(`mbr_usr_${currentUserId}_companies`, JSON.stringify(companies));
     }
-  }, [companies, currentUserId, isUserAdmin]);
+  }, [companies, currentUserId, isUserAdmin, isLoadingUserData]);
 
   useEffect(() => {
-    if (currentUserId && !isUserAdmin) {
+    if (currentUserId && !isUserAdmin && !isLoadingUserData) {
       localStorage.setItem(`mbr_usr_${currentUserId}_deleted_fixed_single`, JSON.stringify(deletedFixedSingle));
     }
-  }, [deletedFixedSingle, currentUserId, isUserAdmin]);
+  }, [deletedFixedSingle, currentUserId, isUserAdmin, isLoadingUserData]);
 
   useEffect(() => {
-    if (currentUserId && !isUserAdmin) {
+    if (currentUserId && !isUserAdmin && !isLoadingUserData) {
       localStorage.setItem(`mbr_usr_${currentUserId}_canceled_fixed_series`, JSON.stringify(canceledFixedSeries));
     }
-  }, [canceledFixedSeries, currentUserId, isUserAdmin]);
+  }, [canceledFixedSeries, currentUserId, isUserAdmin, isLoadingUserData]);
 
   useEffect(() => {
-    if (currentUserId && !isUserAdmin) {
+    if (currentUserId && !isUserAdmin && !isLoadingUserData) {
       localStorage.setItem(`mbr_usr_${currentUserId}_canceled_installment_series`, JSON.stringify(canceledInstallmentSeries));
     }
-  }, [canceledInstallmentSeries, currentUserId, isUserAdmin]);
+  }, [canceledInstallmentSeries, currentUserId, isUserAdmin, isLoadingUserData]);
 
   useEffect(() => {
-    if (currentUserId && !isUserAdmin) {
+    if (currentUserId && !isUserAdmin && !isLoadingUserData) {
       localStorage.setItem(`mbr_usr_${currentUserId}_deleted_installment_slots`, JSON.stringify(deletedInstallmentSlots));
     }
-  }, [deletedInstallmentSlots, currentUserId, isUserAdmin]);
+  }, [deletedInstallmentSlots, currentUserId, isUserAdmin, isLoadingUserData]);
 
-  const handleLogout = () => {
-    authService.logout();
+  const handleLogout = async () => {
+    await authService.logout();
+    resetUserDataState();
     setAuthSession(null);
   };
 
@@ -369,14 +414,6 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
-    localStorage.setItem('mbr_transactions', JSON.stringify(transactions));
-  }, [transactions]);
-
-  useEffect(() => {
-    localStorage.setItem('mbr_enabled_modules', JSON.stringify(enabledModules));
-  }, [enabledModules]);
-
-  useEffect(() => {
     localStorage.setItem('mbr_dark_mode', String(isDarkMode));
     if (isDarkMode) {
       document.documentElement.classList.add('dark');
@@ -390,34 +427,6 @@ const App: React.FC = () => {
     if (activeTab === 'PERSONAL' && !enabledModules.personal) setActiveTab('HOME');
     if (activeTab === 'BUSINESS' && !enabledModules.business) setActiveTab('HOME');
   }, [enabledModules, activeTab]);
-
-  useEffect(() => {
-    localStorage.setItem('mbr_personal_cats', JSON.stringify(personalCats));
-  }, [personalCats]);
-
-  useEffect(() => {
-    localStorage.setItem('mbr_business_cats', JSON.stringify(businessCats));
-  }, [businessCats]);
-
-  useEffect(() => {
-    localStorage.setItem('mbr_companies', JSON.stringify(companies));
-  }, [companies]);
-
-  useEffect(() => {
-    localStorage.setItem('mbr_deleted_fixed_single', JSON.stringify(deletedFixedSingle));
-  }, [deletedFixedSingle]);
-
-  useEffect(() => {
-    localStorage.setItem('mbr_canceled_fixed_series', JSON.stringify(canceledFixedSeries));
-  }, [canceledFixedSeries]);
-
-  useEffect(() => {
-    localStorage.setItem('mbr_canceled_installment_series', JSON.stringify(canceledInstallmentSeries));
-  }, [canceledInstallmentSeries]);
-
-  useEffect(() => {
-    localStorage.setItem('mbr_deleted_installment_slots', JSON.stringify(deletedInstallmentSlots));
-  }, [deletedInstallmentSlots]);
 
   const runAnalysis = useCallback(async (params?: AnalysisParams) => {
     if (isAnalyzing) return; 
@@ -685,73 +694,116 @@ const App: React.FC = () => {
       const currentNum = targetTx.installments.current;
 
       if (scope === 'ALL_INSTALLMENTS') {
+        const toDeleteIds: string[] = [];
         setTransactions(prev => prev.filter(t => {
           if (!t.installments) return true;
           const tpId = t.installments.parentId || t.id;
           const sameSeries = tpId === pId || (t.description === targetTx.description && t.category === targetTx.category && t.module === targetTx.module);
-          return !sameSeries;
+          if (sameSeries) {
+            toDeleteIds.push(t.id);
+            return false;
+          }
+          return true;
         }));
-        setCanceledInstallmentSeries(prev => [
-          ...prev.filter(c => c.parentId !== pId),
-          { parentId: pId, maxAllowedInstallment: 0 }
-        ]);
+        if (currentUserId) {
+          toDeleteIds.forEach(delId => financialService.deleteTransaction(currentUserId, delId));
+          const updatedCanceled = [
+            ...canceledInstallmentSeries.filter(c => c.parentId !== pId),
+            { parentId: pId, maxAllowedInstallment: 0 }
+          ];
+          setCanceledInstallmentSeries(updatedCanceled);
+          financialService.updateUserSettings(currentUserId, { canceled_installment_series: updatedCanceled });
+        }
       } else if (scope === 'THIS_AND_FUTURE_INSTALLMENTS') {
+        const toDeleteIds: string[] = [];
         setTransactions(prev => prev.filter(t => {
           if (!t.installments) return true;
           const tpId = t.installments.parentId || t.id;
           const sameSeries = tpId === pId || (t.description === targetTx.description && t.category === targetTx.category && t.module === targetTx.module);
           if (sameSeries && t.installments.current >= currentNum) {
+            toDeleteIds.push(t.id);
             return false;
           }
           return true;
         }));
-        setCanceledInstallmentSeries(prev => [
-          ...prev.filter(c => c.parentId !== pId),
-          { parentId: pId, maxAllowedInstallment: currentNum - 1 }
-        ]);
+        if (currentUserId) {
+          toDeleteIds.forEach(delId => financialService.deleteTransaction(currentUserId, delId));
+          const updatedCanceled = [
+            ...canceledInstallmentSeries.filter(c => c.parentId !== pId),
+            { parentId: pId, maxAllowedInstallment: currentNum - 1 }
+          ];
+          setCanceledInstallmentSeries(updatedCanceled);
+          financialService.updateUserSettings(currentUserId, { canceled_installment_series: updatedCanceled });
+        }
       } else {
         setTransactions(prev => prev.filter(t => t.id !== id));
-        setDeletedInstallmentSlots(prev => [...prev, `${pId}-${currentNum}`]);
+        if (currentUserId) {
+          financialService.deleteTransaction(currentUserId, id);
+          const updatedSlots = [...deletedInstallmentSlots, `${pId}-${currentNum}`];
+          setDeletedInstallmentSlots(updatedSlots);
+          financialService.updateUserSettings(currentUserId, { deleted_installment_slots: updatedSlots });
+        }
       }
     } else if (targetTx.isFixed) {
       const fixedKey = `${targetTx.module}-${targetTx.description}-${targetTx.category}`;
 
       if (scope === 'FUTURE_FIXED') {
+        const toDeleteIds: string[] = [];
         setTransactions(prev => prev.filter(t => {
           if (!t.isFixed) return true;
           const sameSeries = t.module === targetTx.module && t.description === targetTx.description && t.category === targetTx.category && t.type === targetTx.type;
           if (sameSeries && new Date(t.date) >= new Date(targetTx.date)) {
+            toDeleteIds.push(t.id);
             return false;
           }
           return true;
         }));
-        setCanceledFixedSeries(prev => [
-          ...prev.filter(c => c.key !== fixedKey),
-          { key: fixedKey, startYear: parts.year, startMonth: parts.month }
-        ]);
+        if (currentUserId) {
+          toDeleteIds.forEach(delId => financialService.deleteTransaction(currentUserId, delId));
+          const updatedCanceled = [
+            ...canceledFixedSeries.filter(c => c.key !== fixedKey),
+            { key: fixedKey, startYear: parts.year, startMonth: parts.month }
+          ];
+          setCanceledFixedSeries(updatedCanceled);
+          financialService.updateUserSettings(currentUserId, { canceled_fixed_series: updatedCanceled });
+        }
       } else {
         setTransactions(prev => prev.filter(t => t.id !== id));
-        setDeletedFixedSingle(prev => [...prev, `${fixedKey}-${parts.year}-${parts.month}`]);
+        if (currentUserId) {
+          financialService.deleteTransaction(currentUserId, id);
+          const updatedFixed = [...deletedFixedSingle, `${fixedKey}-${parts.year}-${parts.month}`];
+          setDeletedFixedSingle(updatedFixed);
+          financialService.updateUserSettings(currentUserId, { deleted_fixed_single: updatedFixed });
+        }
       }
     } else {
       setTransactions(prev => prev.filter(t => t.id !== id));
+      if (currentUserId) {
+        financialService.deleteTransaction(currentUserId, id);
+      }
     }
   };
 
   const handleTogglePaid = (id: string) => {
+    let updatedTx: Transaction | null = null;
     setTransactions(prev => prev.map(t => {
       if (t.id === id) {
         const isPaid = !t.paid;
         const now = new Date();
         const utcPaymentDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())).toISOString();
-        return { 
+        updatedTx = { 
           ...t, 
           paid: isPaid, 
           paymentDate: isPaid ? utcPaymentDate : undefined 
         };
+        return updatedTx;
       }
       return t;
     }));
+
+    if (currentUserId && updatedTx) {
+      financialService.upsertTransaction(currentUserId, updatedTx);
+    }
   };
 
   const handleAddTransaction = (e: React.FormEvent) => {
@@ -765,8 +817,13 @@ const App: React.FC = () => {
     if (newCat === 'Outros' && customCat.trim()) {
       finalCategory = customCat.trim();
       if (isFixedCategory) {
-        if (activeTab === 'PERSONAL') setPersonalCats(prev => [...prev.filter(c => c !== 'Outros'), finalCategory, 'Outros']);
-        else setBusinessCats(prev => [...prev.filter(c => c !== 'Outros'), finalCategory, 'Outros']);
+        if (activeTab === 'PERSONAL') {
+          setPersonalCats(prev => [...prev.filter(c => c !== 'Outros'), finalCategory, 'Outros']);
+          if (currentUserId) financialService.addCategory(currentUserId, 'PERSONAL', finalCategory);
+        } else {
+          setBusinessCats(prev => [...prev.filter(c => c !== 'Outros'), finalCategory, 'Outros']);
+          if (currentUserId) financialService.addCategory(currentUserId, 'BUSINESS', finalCategory);
+        }
       }
     }
     const parsedDueDay = dueDay ? parseInt(dueDay) : undefined;
@@ -780,6 +837,7 @@ const App: React.FC = () => {
     const utcPaymentDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())).toISOString();
 
     if (editingId) {
+      let updatedTx: Transaction | null = null;
       setTransactions(prev => prev.map(t => {
         if (t.id === editingId) {
           const parts = getLocalDateParts(t.date);
@@ -790,7 +848,7 @@ const App: React.FC = () => {
           const wasBoleto = Boolean(t.isFixed || t.installments || t.dueDay !== undefined);
           const isPaidNow = !isBoleto ? true : (wasBoleto ? Boolean(t.paid) : false);
 
-          return {
+          updatedTx = {
             ...t,
             date: editDate,
             description: newDesc,
@@ -807,9 +865,14 @@ const App: React.FC = () => {
               parentId: t.installments?.parentId || t.id
             } : undefined
           };
+          return updatedTx;
         }
         return t;
       }));
+
+      if (currentUserId && updatedTx) {
+        financialService.upsertTransaction(currentUserId, updatedTx);
+      }
     } else {
       const id = crypto.randomUUID();
       const txDate = new Date(Date.UTC(filter.year, filter.month, safeDay)).toISOString();
@@ -832,6 +895,9 @@ const App: React.FC = () => {
         } : undefined
       };
       setTransactions(prev => [tx, ...prev]);
+      if (currentUserId) {
+        financialService.upsertTransaction(currentUserId, tx);
+      }
     }
     resetForm();
   };
@@ -855,6 +921,9 @@ const App: React.FC = () => {
       paymentDate: utcPaymentDate
     };
     setTransactions(prev => [tx, ...prev]);
+    if (currentUserId) {
+      financialService.upsertTransaction(currentUserId, tx);
+    }
     resetForm();
   };
 
@@ -862,10 +931,13 @@ const App: React.FC = () => {
     e.preventDefault(); if (!newCompanyName.trim()) return;
     const company = newCompanyName.trim();
     if (editingCompanyName) {
-      setCompanies(prev => prev.map(c => c === editingCompanyName ? company : c));
+      const old = editingCompanyName;
+      setCompanies(prev => prev.map(c => c === old ? company : c));
       setEditingCompanyName(null);
+      if (currentUserId) financialService.updateCompany(currentUserId, old, company);
     } else if (!companies.includes(company)) {
       setCompanies(prev => [...prev, company]);
+      if (currentUserId) financialService.addCompany(currentUserId, company);
     }
     setNewCompanyName('');
   };
@@ -873,25 +945,42 @@ const App: React.FC = () => {
   const handleRemoveCompany = (company: string) => {
     setCompanies(prev => prev.filter(c => c !== company));
     setConfirmDeleteCompany(null);
+    if (currentUserId) financialService.deleteCompany(currentUserId, company);
   };
 
   const handleCleanup = () => {
     if (!cleanupTarget) return;
     
+    const toDelete = transactions.filter(t => cleanupTarget === 'BOTH' || t.module === cleanupTarget);
     setTransactions(prev => {
       if (cleanupTarget === 'BOTH') return [];
       return prev.filter(t => t.module !== cleanupTarget);
     });
 
+    if (currentUserId) {
+      toDelete.forEach(t => financialService.deleteTransaction(currentUserId, t.id));
+    }
+
     if (cleanupTarget === 'PERSONAL') {
       setPersonalCats(PERSONAL_CATEGORIES);
-      setCanceledFixedSeries(prev => prev.filter(c => !c.key.startsWith('PERSONAL-')));
-      setDeletedFixedSingle(prev => prev.filter(k => !k.startsWith('PERSONAL-')));
+      const newCanceled = canceledFixedSeries.filter(c => !c.key.startsWith('PERSONAL-'));
+      const newDeleted = deletedFixedSingle.filter(k => !k.startsWith('PERSONAL-'));
+      setCanceledFixedSeries(newCanceled);
+      setDeletedFixedSingle(newDeleted);
+      if (currentUserId) {
+        financialService.updateUserSettings(currentUserId, { canceled_fixed_series: newCanceled, deleted_fixed_single: newDeleted });
+      }
     } else if (cleanupTarget === 'BUSINESS') {
       setBusinessCats(BUSINESS_EXPENSE_CATEGORIES);
       setCompanies([]);
-      setCanceledFixedSeries(prev => prev.filter(c => !c.key.startsWith('BUSINESS-')));
-      setDeletedFixedSingle(prev => prev.filter(k => !k.startsWith('BUSINESS-')));
+      const newCanceled = canceledFixedSeries.filter(c => !c.key.startsWith('BUSINESS-'));
+      const newDeleted = deletedFixedSingle.filter(k => !k.startsWith('BUSINESS-'));
+      setCanceledFixedSeries(newCanceled);
+      setDeletedFixedSingle(newDeleted);
+      if (currentUserId) {
+        companies.forEach(c => financialService.deleteCompany(currentUserId, c));
+        financialService.updateUserSettings(currentUserId, { canceled_fixed_series: newCanceled, deleted_fixed_single: newDeleted });
+      }
     } else if (cleanupTarget === 'BOTH') {
       setPersonalCats(PERSONAL_CATEGORIES);
       setBusinessCats(BUSINESS_EXPENSE_CATEGORIES);
@@ -900,6 +989,15 @@ const App: React.FC = () => {
       setDeletedFixedSingle([]);
       setCanceledInstallmentSeries([]);
       setDeletedInstallmentSlots([]);
+      if (currentUserId) {
+        companies.forEach(c => financialService.deleteCompany(currentUserId, c));
+        financialService.updateUserSettings(currentUserId, {
+          canceled_fixed_series: [],
+          deleted_fixed_single: [],
+          canceled_installment_series: [],
+          deleted_installment_slots: []
+        });
+      }
     }
 
     setShowCleanup(false);
