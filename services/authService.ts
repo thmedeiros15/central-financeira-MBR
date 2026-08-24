@@ -433,6 +433,26 @@ class AuthService {
   }
 
   /**
+   * Alterar a senha do usuário atualmente autenticado via Supabase Auth (para uso individual no Perfil).
+   */
+  public async changeOwnPassword(newPassword: string): Promise<{ success: boolean; message?: string }> {
+    if (!newPassword || newPassword.length < 6) {
+      return { success: false, message: 'A nova senha deve ter no mínimo 6 caracteres.' };
+    }
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword
+      });
+      if (error) {
+        return { success: false, message: error.message || 'Erro ao alterar senha no Supabase Auth.' };
+      }
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, message: e?.message || 'Falha na comunicação com o Supabase Auth.' };
+    }
+  }
+
+  /**
    * Atualizar dados de um usuário (Nome, E-mail, Login/Username, Role, Status, Senha) exclusivamente no Supabase.
    */
   public async updateUser(
@@ -509,6 +529,7 @@ class AuthService {
         const { error: authErr } = await supabaseAdmin.auth.admin.updateUserById(id, authUpdates);
         if (authErr) {
           console.warn('Erro ao atualizar dados no auth.users:', authErr.message);
+          return { success: false, message: 'Erro ao atualizar dados no Supabase Auth: ' + authErr.message };
         }
       }
 

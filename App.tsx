@@ -392,10 +392,36 @@ const App: React.FC = () => {
       return;
     }
 
-    const nameResult = await authService.updateUser(authSession.user.id, { name: editName.trim() });
-    if (!nameResult.success) {
-      setProfileMsg({ type: 'error', text: nameResult.message || 'Erro ao atualizar nome.' });
+    // Validação de senha caso o usuário tenha preenchido
+    if (editPassword) {
+      if (editPassword.length < 6) {
+        setProfileMsg({ type: 'error', text: 'A nova senha deve possuir no mínimo 6 caracteres.' });
+        return;
+      }
+      if (editPassword !== editPasswordConfirm) {
+        setProfileMsg({ type: 'error', text: 'A confirmação de senha não confere com a nova senha.' });
+        return;
+      }
+    }
+
+    // 1. Atualizar nome no perfil
+    const updateResult = await authService.updateUser(authSession.user.id, { 
+      name: editName.trim(),
+      password: editPassword.trim() || undefined
+    });
+
+    if (!updateResult.success) {
+      setProfileMsg({ type: 'error', text: updateResult.message || 'Erro ao atualizar dados do perfil.' });
       return;
+    }
+
+    // 2. Se informou nova senha, atualizar no Supabase Auth via changeOwnPassword
+    if (editPassword.trim()) {
+      const passResult = await authService.changeOwnPassword(editPassword.trim());
+      if (!passResult.success) {
+        setProfileMsg({ type: 'error', text: passResult.message || 'Erro ao alterar a senha no Supabase Auth.' });
+        return;
+      }
     }
 
     const freshSession = await authService.getCurrentSession();
@@ -403,14 +429,17 @@ const App: React.FC = () => {
       setAuthSession(freshSession);
     }
 
-    setProfileMsg({ type: 'success', text: 'Perfil atualizado com sucesso!' });
+    setProfileMsg({ 
+      type: 'success', 
+      text: editPassword.trim() ? 'Perfil e nova senha atualizados com sucesso!' : 'Perfil atualizado com sucesso!' 
+    });
     setEditPassword('');
     setEditPasswordConfirm('');
 
     setTimeout(() => {
       setShowProfileModal(false);
       setProfileMsg(null);
-    }, 1200);
+    }, 1500);
   };
 
   useEffect(() => {

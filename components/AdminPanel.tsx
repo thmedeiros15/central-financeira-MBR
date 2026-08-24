@@ -134,7 +134,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
     const result = await authService.updateUser(editingUser.id, {
       name: editName,
       email: editEmail,
-      username: editUsername.trim() || undefined,
+      username: editUsername.trim() !== '' ? editUsername.trim() : undefined,
       role: editRole,
       status: editStatus,
       password: editPassword.trim() || undefined
