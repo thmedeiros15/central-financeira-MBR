@@ -1010,7 +1010,7 @@ const App: React.FC = () => {
     switch(activeTab) {
       case 'HOME':
         return (
-          <div className="space-y-6 sm:space-y-8 animate-in fade-in duration-700">
+          <div className="space-y-4 sm:space-y-8 animate-in fade-in duration-700">
             <Dashboard 
               transactions={transactions} 
               filter={filter} 
@@ -1036,7 +1036,7 @@ const App: React.FC = () => {
       case 'PERSONAL':
       case 'BUSINESS':
         return (
-          <div className="space-y-6 sm:space-y-8 animate-in fade-in duration-700">
+          <div className="space-y-4 sm:space-y-8 animate-in fade-in duration-700">
             <div className="bg-white dark:bg-slate-900 p-3 sm:p-4 rounded-2xl border border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-3 sm:gap-6 shadow-sm">
               <div className="flex items-center gap-2">
                 <span className="text-[10px] font-black text-slate-400 dark:text-slate-400 uppercase tracking-widest">Visualizar:</span>
@@ -1470,9 +1470,9 @@ const App: React.FC = () => {
             </div>
           </div>
         </header>
-        <main className="flex-1 px-4 sm:px-8 py-6 sm:py-8 bg-[#FAFBFF] dark:bg-[#0B0F19] transition-colors">
+        <main className="flex-1 px-3 sm:px-8 pt-3 pb-6 sm:py-8 bg-[#FAFBFF] dark:bg-[#0B0F19] transition-colors">
           <div className="max-w-[1200px] mx-auto">
-            <div className="mb-8">
+            <div className="mb-2.5 sm:mb-8">
               <h2 className="text-xl sm:text-3xl font-black text-slate-900 dark:text-slate-100 tracking-tighter">{activeTab === 'HOME' ? 'Central inteligente' : activeTab === 'PERSONAL' ? 'Fluxo Pessoal' : 'Corp Finance'}</h2>
             </div>
             {renderContent()}

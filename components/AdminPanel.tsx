@@ -25,6 +25,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
   // Formulário de Criação
   const [newName, setNewName] = useState('');
   const [newEmail, setNewEmail] = useState('');
+  const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newRole, setNewRole] = useState<UserRole>('USER');
   const [newStatus, setNewStatus] = useState<UserStatus>('ACTIVE');
@@ -32,6 +33,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
   // Formulário de Edição
   const [editName, setEditName] = useState('');
   const [editEmail, setEditEmail] = useState('');
+  const [editUsername, setEditUsername] = useState('');
   const [editRole, setEditRole] = useState<UserRole>('USER');
   const [editStatus, setEditStatus] = useState<UserStatus>('ACTIVE');
   const [editPassword, setEditPassword] = useState('');
@@ -70,9 +72,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
   // Filtro da lista
   const filteredUsers = useMemo(() => {
     return users.filter(u => {
+      const q = searchQuery.toLowerCase();
       const matchesSearch = 
-        u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        u.email.toLowerCase().includes(searchQuery.toLowerCase());
+        u.name.toLowerCase().includes(q) ||
+        u.email.toLowerCase().includes(q) ||
+        (u.username && u.username.toLowerCase().includes(q));
       const matchesRole = roleFilter === 'ALL' || u.role === roleFilter;
       const matchesStatus = statusFilter === 'ALL' || u.status === statusFilter;
 
@@ -86,6 +90,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
     const result = await authService.createUser({
       name: newName,
       email: newEmail,
+      username: newUsername.trim() || undefined,
       password: newPassword,
       role: newRole,
       status: newStatus
@@ -96,6 +101,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
       setShowCreateModal(false);
       setNewName('');
       setNewEmail('');
+      setNewUsername('');
       setNewPassword('');
       setNewRole('USER');
       setNewStatus('ACTIVE');
@@ -109,6 +115,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
     setEditingUser(user);
     setEditName(user.name);
     setEditEmail(user.email);
+    setEditUsername(user.username || '');
     setEditRole(user.role);
     setEditStatus(user.status);
     setEditPassword('');
@@ -127,6 +134,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
     const result = await authService.updateUser(editingUser.id, {
       name: editName,
       email: editEmail,
+      username: editUsername.trim() || undefined,
       role: editRole,
       status: editStatus,
       password: editPassword.trim() || undefined
@@ -380,7 +388,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
                                 </span>
                               )}
                             </p>
-                            <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400 truncate">{u.email}</p>
+                            <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+                              <span className="font-medium text-slate-500 dark:text-slate-400 truncate">{u.email}</span>
+                              {u.username && (
+                                <span className="inline-flex items-center text-[10px] font-extrabold text-[#F26522] bg-[#F26522]/10 border border-[#F26522]/20 px-1.5 py-0.5 rounded-md">
+                                  @{u.username}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </td>
@@ -504,6 +519,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
               </div>
 
               <div>
+                <label className="block text-[10px] font-black uppercase text-slate-400 mb-1 flex items-center justify-between">
+                  <span>Login de Acesso / Usuário</span>
+                  <span className="text-[9px] text-[#F26522] font-semibold lowercase">opcional (ex: thmedeiros)</span>
+                </label>
+                <input
+                  type="text"
+                  value={newUsername}
+                  onChange={e => setNewUsername(e.target.value.toLowerCase().replace(/\s+/g, ''))}
+                  placeholder="Ex: carlossilva (permite logar sem digitar o e-mail completo)"
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#F26522]"
+                />
+              </div>
+
+              <div>
                 <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Senha Inicial</label>
                 <input
                   type="password"
@@ -592,6 +621,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentAdmin }) => {
                   required
                   value={editEmail}
                   onChange={e => setEditEmail(e.target.value)}
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#F26522]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase text-slate-400 mb-1 flex items-center justify-between">
+                  <span>Login de Acesso / Usuário</span>
+                  <span className="text-[9px] text-[#F26522] font-semibold lowercase">opcional (ex: thmedeiros)</span>
+                </label>
+                <input
+                  type="text"
+                  value={editUsername}
+                  onChange={e => setEditUsername(e.target.value.toLowerCase().replace(/\s+/g, ''))}
+                  placeholder="Ex: thmedeiros"
                   className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#F26522]"
                 />
               </div>

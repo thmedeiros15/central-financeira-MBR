@@ -12,53 +12,73 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   email TEXT NOT NULL,
+  username TEXT UNIQUE,
   role TEXT NOT NULL CHECK (role IN ('ADMIN', 'USER')) DEFAULT 'USER',
   status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE')) DEFAULT 'ACTIVE',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   last_login_at TIMESTAMPTZ
 );
 
+-- Adicionar coluna de login/username (caso esteja atualizando uma tabela existente)
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS username TEXT UNIQUE;
+CREATE INDEX IF NOT EXISTS idx_profiles_username ON public.profiles(LOWER(username));
+
+-- ==============================================================================
+-- FUNÇÕES SECURITY DEFINER PARA EVITAR RECURSÃO INFINITA NAS POLICIES
+-- ==============================================================================
+
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS BOOLEAN
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+STABLE
+AS $$
+  SELECT EXISTS (
+    SELECT 1 
+    FROM public.profiles 
+    WHERE id = auth.uid() AND role = 'ADMIN'
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION public.is_active_user()
+RETURNS BOOLEAN
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+STABLE
+AS $$
+  SELECT EXISTS (
+    SELECT 1 
+    FROM public.profiles 
+    WHERE id = auth.uid() AND role = 'USER' AND status = 'ACTIVE'
+  );
+$$;
+
+
 -- Habilitar RLS em Profiles
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 
--- Políticas de RLS para Profiles:
--- a) Qualquer usuário autenticado pode ver seu próprio perfil.
-CREATE POLICY "Usuários podem ver seu próprio perfil" 
+-- Limpar políticas antigas
+DROP POLICY IF EXISTS "Usuários podem ver seu próprio perfil" ON public.profiles;
+DROP POLICY IF EXISTS "Administradores podem ver todos os perfis" ON public.profiles;
+DROP POLICY IF EXISTS "Usuários podem atualizar seu próprio perfil" ON public.profiles;
+DROP POLICY IF EXISTS "Administradores podem atualizar qualquer perfil" ON public.profiles;
+DROP POLICY IF EXISTS "Administradores podem inserir perfis" ON public.profiles;
+
+-- Políticas não-recursivas para Profiles usando public.is_admin()
+CREATE POLICY "Leitura de perfil (Próprio ou Admin)" 
   ON public.profiles FOR SELECT 
-  USING (auth.uid() = id);
+  USING (auth.uid() = id OR public.is_admin());
 
--- b) Administradores (role ADMIN) podem ver todos os perfis.
-CREATE POLICY "Administradores podem ver todos os perfis" 
-  ON public.profiles FOR SELECT 
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN'
-    )
-  );
-
--- c) Usuários podem atualizar seu próprio nome e email.
-CREATE POLICY "Usuários podem atualizar seu próprio perfil" 
+CREATE POLICY "Atualização de perfil (Próprio ou Admin)" 
   ON public.profiles FOR UPDATE 
-  USING (auth.uid() = id)
-  WITH CHECK (auth.uid() = id);
+  USING (auth.uid() = id OR public.is_admin())
+  WITH CHECK (auth.uid() = id OR public.is_admin());
 
--- d) Administradores podem atualizar qualquer perfil (status, role, name, email).
-CREATE POLICY "Administradores podem atualizar qualquer perfil" 
-  ON public.profiles FOR UPDATE 
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN'
-    )
-  );
-
--- e) Administradores podem inserir novos perfis (durante cadastro pelo painel).
-CREATE POLICY "Administradores podem inserir perfis" 
+CREATE POLICY "Inserção de perfil (Próprio ou Admin)" 
   ON public.profiles FOR INSERT 
-  WITH CHECK (
-    auth.uid() = id OR EXISTS (
-      SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN'
-    )
-  );
+  WITH CHECK (auth.uid() = id OR public.is_admin());
 
 
 -- 3. TABELA DE TRANSAÇÕES (TRANSACTIONS)
@@ -81,34 +101,29 @@ CREATE TABLE IF NOT EXISTS public.transactions (
 
 ALTER TABLE public.transactions ENABLE ROW LEVEL SECURITY;
 
--- Políticas RLS para Transactions:
--- Usuários comuns acessam/modificam SOMENTE suas próprias transações.
--- O ADMIN NÃO POSSUI POLÍTICA DE LEITURA/ESCRITA, portanto o banco nega qualquer acesso a dados financeiros pelo Admin.
+-- Limpar políticas antigas
+DROP POLICY IF EXISTS "Usuário lê apenas suas próprias transações" ON public.transactions;
+DROP POLICY IF EXISTS "Usuário insere apenas para si mesmo" ON public.transactions;
+DROP POLICY IF EXISTS "Usuário atualiza apenas suas próprias transações" ON public.transactions;
+DROP POLICY IF EXISTS "Usuário deleta apenas suas próprias transações" ON public.transactions;
 
+-- Políticas RLS para Transactions usando public.is_active_user()
 CREATE POLICY "Usuário lê apenas suas próprias transações" 
   ON public.transactions FOR SELECT 
-  USING (auth.uid() = user_id AND EXISTS (
-    SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'USER' AND status = 'ACTIVE'
-  ));
+  USING (auth.uid() = user_id AND public.is_active_user());
 
 CREATE POLICY "Usuário insere apenas para si mesmo" 
   ON public.transactions FOR INSERT 
-  WITH CHECK (auth.uid() = user_id AND EXISTS (
-    SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'USER' AND status = 'ACTIVE'
-  ));
+  WITH CHECK (auth.uid() = user_id AND public.is_active_user());
 
 CREATE POLICY "Usuário atualiza apenas suas próprias transações" 
   ON public.transactions FOR UPDATE 
-  USING (auth.uid() = user_id AND EXISTS (
-    SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'USER' AND status = 'ACTIVE'
-  ))
+  USING (auth.uid() = user_id AND public.is_active_user())
   WITH CHECK (auth.uid() = user_id);
 
 CREATE POLICY "Usuário deleta apenas suas próprias transações" 
   ON public.transactions FOR DELETE 
-  USING (auth.uid() = user_id AND EXISTS (
-    SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'USER' AND status = 'ACTIVE'
-  ));
+  USING (auth.uid() = user_id AND public.is_active_user());
 
 
 -- 4. TABELA DE CATEGORIAS (CATEGORIES)
@@ -218,18 +233,26 @@ CREATE POLICY "Usuário insere seus diagnósticos (INSERT)"
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
-  INSERT INTO public.profiles (id, name, email, role, status, created_at)
+  INSERT INTO public.profiles (id, name, email, username, role, status, created_at)
   VALUES (
     NEW.id,
     COALESCE(NEW.raw_user_meta_data->>'name', NEW.email),
     NEW.email,
+    NULLIF(TRIM(LOWER(NEW.raw_user_meta_data->>'username')), ''),
     COALESCE(NEW.raw_user_meta_data->>'role', 'USER'),
     'ACTIVE',
     NOW()
-  );
+  )
+  ON CONFLICT (id) DO UPDATE
+  SET 
+    name = EXCLUDED.name,
+    email = EXCLUDED.email,
+    username = COALESCE(EXCLUDED.username, public.profiles.username);
   
   -- Criar linha padrão de user_settings
-  INSERT INTO public.user_settings (user_id) VALUES (NEW.id);
+  INSERT INTO public.user_settings (user_id) 
+  VALUES (NEW.id)
+  ON CONFLICT (user_id) DO NOTHING;
   
   RETURN NEW;
 END;

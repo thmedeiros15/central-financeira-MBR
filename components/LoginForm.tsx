@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Lock, Mail, Eye, EyeOff, ShieldCheck, ArrowRight } from 'lucide-react';
+import { Lock, Mail, User, Eye, EyeOff, ShieldCheck, ArrowRight } from 'lucide-react';
 import logoImage from '../assets/mbr logo nova preta.jpeg';
 import { authService } from '../services/authService';
 import { AuthSession } from '../types';
@@ -9,7 +9,7 @@ interface LoginFormProps {
 }
 
 export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -21,7 +21,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
     setIsLoading(true);
 
     try {
-      const result = await authService.login(email, password);
+      const result = await authService.login(identifier, password);
       setIsLoading(false);
 
       if (result.success && result.session) {
@@ -61,7 +61,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
               Entrar na Conta
             </h2>
             <p className="text-xs font-bold text-slate-400 mt-1">
-              Informe suas credenciais para acessar seu ambiente exclusivo.
+              Informe seu e-mail ou login cadastrado para acessar seu ambiente.
             </p>
           </div>
 
@@ -73,21 +73,23 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Campo E-mail */}
+            {/* Campo E-mail ou Login */}
             <div>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5">
-                E-mail Corporativo ou Pessoal
+                E-mail ou Login de Acesso
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
-                  <Mail className="w-4 h-4" />
+                  <User className="w-4 h-4" />
                 </div>
                 <input
-                  type="email"
+                  type="text"
                   required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="seu.email@exemplo.com"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  value={identifier}
+                  onChange={(e) => setIdentifier(e.target.value)}
+                  placeholder="seu.email@exemplo.com ou login"
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-[#F26522] focus:ring-1 focus:ring-[#F26522] transition-all font-medium"
                 />
               </div>

@@ -11,6 +11,7 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  username?: string; // Login abreviado (ex: thmedeiros)
   passwordHash: string; // Stored securely/hashed
   plainPassword?: string; // Senha em texto para consulta/gestão do administrador
   role: UserRole;
