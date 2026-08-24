@@ -404,24 +404,15 @@ const App: React.FC = () => {
       }
     }
 
-    // 1. Atualizar nome no perfil
+    // Atualizar nome e/ou senha via updateUser (usa Admin API isolada para senha)
     const updateResult = await authService.updateUser(authSession.user.id, { 
       name: editName.trim(),
-      password: editPassword.trim() || undefined
+      ...(editPassword.trim() ? { password: editPassword.trim() } : {})
     });
 
     if (!updateResult.success) {
       setProfileMsg({ type: 'error', text: updateResult.message || 'Erro ao atualizar dados do perfil.' });
       return;
-    }
-
-    // 2. Se informou nova senha, atualizar no Supabase Auth via changeOwnPassword
-    if (editPassword.trim()) {
-      const passResult = await authService.changeOwnPassword(editPassword.trim());
-      if (!passResult.success) {
-        setProfileMsg({ type: 'error', text: passResult.message || 'Erro ao alterar a senha no Supabase Auth.' });
-        return;
-      }
     }
 
     const freshSession = await authService.getCurrentSession();

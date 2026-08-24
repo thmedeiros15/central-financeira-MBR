@@ -507,29 +507,47 @@ class AuthService {
         return { success: false, message: error.message };
       }
 
-      // Atualizar no Supabase Auth (senha, e-mail ou metadados de nome/role/username)
+      // Atualizar no Supabase Auth via Admin API
       if (supabaseAdmin) {
-        const authUpdates: any = {};
-        if (updates.password) authUpdates.password = updates.password;
-        if (updates.email) {
-          authUpdates.email = updates.email.trim().toLowerCase();
-          authUpdates.email_confirm = true;
+        // 1. Se tiver nova senha, atualizar SOMENTE a senha primeiro (chamada isolada)
+        if (updates.password && updates.password.trim().length >= 6) {
+          const { error: pwdErr } = await supabaseAdmin.auth.admin.updateUserById(id, {
+            password: updates.password.trim()
+          });
+          if (pwdErr) {
+            console.error('Erro ao atualizar senha no Supabase Auth:', pwdErr.message, pwdErr);
+            return { success: false, message: 'Erro ao atualizar senha: ' + pwdErr.message };
+          }
+          console.log('Senha atualizada com sucesso no Supabase Auth para:', id);
         }
 
-        const { data: authUserData } = await supabaseAdmin.auth.admin.getUserById(id);
-        const currentMeta = authUserData?.user?.user_metadata || {};
+        // 2. Atualizar metadados e e-mail (separado da senha)
+        const metaUpdates: any = {};
+        if (updates.email) {
+          metaUpdates.email = updates.email.trim().toLowerCase();
+          metaUpdates.email_confirm = true;
+        }
 
-        authUpdates.user_metadata = {
-          ...currentMeta,
-          ...(updates.name ? { name: updates.name.trim() } : {}),
-          ...(updates.role ? { role: updates.role } : {}),
-          ...(cleanUsername !== undefined ? { username: cleanUsername } : {})
-        };
+        const hasMetaChanges = updates.name || updates.role || cleanUsername !== undefined;
+        if (hasMetaChanges || updates.email) {
+          try {
+            const { data: authUserData } = await supabaseAdmin.auth.admin.getUserById(id);
+            const currentMeta = authUserData?.user?.user_metadata || {};
 
-        const { error: authErr } = await supabaseAdmin.auth.admin.updateUserById(id, authUpdates);
-        if (authErr) {
-          console.warn('Erro ao atualizar dados no auth.users:', authErr.message);
-          return { success: false, message: 'Erro ao atualizar dados no Supabase Auth: ' + authErr.message };
+            metaUpdates.user_metadata = {
+              ...currentMeta,
+              ...(updates.name ? { name: updates.name.trim() } : {}),
+              ...(updates.role ? { role: updates.role } : {}),
+              ...(cleanUsername !== undefined ? { username: cleanUsername } : {})
+            };
+
+            const { error: metaErr } = await supabaseAdmin.auth.admin.updateUserById(id, metaUpdates);
+            if (metaErr) {
+              console.warn('Erro ao atualizar metadata no auth.users:', metaErr.message);
+            }
+          } catch (metaEx: any) {
+            console.warn('Exceção ao atualizar metadata:', metaEx?.message);
+          }
         }
       }
 
