@@ -11,23 +11,20 @@ export function hashPassword(plainText: string): string {
   return `mbr_hash_${Math.abs(hash)}_${plainText.length}`;
 }
 
-const LOCAL_USERS_KEY = 'mbr_users_db_v1';
-const LOCAL_SESSION_KEY = 'mbr_auth_session_v1';
-
 class AuthService {
   /**
-   * Realiza login através do Supabase Auth aceitando tanto E-mail quanto Login/Usuário abreviado.
-   * Fallback seguro para credenciais locais se desconectado.
+   * Realiza login exclusivamente através do Supabase Auth.
+   * Suporta autenticação tanto por e-mail quanto por login/apelido abreviado.
    */
   public async login(identifier: string, password: string): Promise<{ success: boolean; session?: AuthSession; message?: string }> {
     const cleanIdentifier = identifier.trim().toLowerCase();
     let targetEmail = cleanIdentifier;
 
-    // Se o identificador não possui '@', buscar o e-mail correspondente ao username
+    // Se o identificador informado não possui '@', resolver o e-mail correspondente via Supabase
     if (!cleanIdentifier.includes('@')) {
       let resolvedEmail: string | null = null;
 
-      // 1. Tentar resolver via RPC do Supabase (funciona para anônimos no frontend de produção)
+      // 1. Tentar resolver via RPC no Supabase (get_email_by_identifier)
       try {
         const { data: rpcEmail } = await supabase.rpc('get_email_by_identifier', {
           login_identifier: cleanIdentifier
@@ -36,7 +33,7 @@ class AuthService {
           resolvedEmail = rpcEmail.toLowerCase();
         }
       } catch (_) {
-        // ignore se RPC ainda não foi criada no Supabase
+        // RPC não disponível, prosseguir para fallback via consulta
       }
 
       // 2. Tentar buscar pelo username na tabela profiles
@@ -53,11 +50,11 @@ class AuthService {
             resolvedEmail = profile.email.toLowerCase();
           }
         } catch (_) {
-          // Ignorar erro se coluna username ainda não existir
+          // ignore
         }
       }
 
-      // 3. Se não encontrou em profiles e temos supabaseAdmin, buscar nos metadados de auth.users
+      // 3. Se temos supabaseAdmin, buscar nos metadados de auth.users
       if (!resolvedEmail && supabaseAdmin) {
         try {
           const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
@@ -73,258 +70,155 @@ class AuthService {
         }
       }
 
-      // 3. Fallback no banco local
-      if (!resolvedEmail) {
-        try {
-          const stored = localStorage.getItem(LOCAL_USERS_KEY);
-          if (stored) {
-            const localUsers: User[] = JSON.parse(stored);
-            const match = localUsers.find(u => u.username?.toLowerCase() === cleanIdentifier);
-            if (match) resolvedEmail = match.email.toLowerCase();
-          }
-        } catch (_) {
-          // ignore
-        }
-      }
-
       if (resolvedEmail) {
         targetEmail = resolvedEmail;
       } else {
-        // Se foi informado um username mas não encontramos o e-mail, tentar fallback local direto
-        const localResult = this.loginLocalFallback(cleanIdentifier, password);
-        if (localResult.success) return localResult;
-        return { success: false, message: 'Usuário ou senha incorretos.' };
+        return { success: false, message: 'Usuário ou e-mail não encontrado.' };
       }
     }
 
-    // 1. Tentar Login pelo Supabase Auth com o targetEmail
+    // 1. Autenticação estrita no Supabase Auth
     try {
-      let { data, error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email: targetEmail,
         password: password
       });
 
-      // Se falhou no Supabase Auth e temos a chave de admin, tenta sincronizar/criar o perfil no Supabase Auth
-      if (error && supabaseAdmin) {
-        // Verificar se existe um perfil cadastrado na tabela profiles
-        const { data: profile } = await supabaseAdmin
-          .from('profiles')
-          .select('*')
-          .eq('email', targetEmail)
-          .maybeSingle();
-
-        if (profile) {
-          // Atualiza a senha no auth.users para a senha informada e confirma o e-mail
-          await supabaseAdmin.auth.admin.updateUserById(profile.id, {
-            password: password,
-            email_confirm: true
-          });
-          // Tentar login novamente com as credenciais sincronizadas
-          const retry = await supabase.auth.signInWithPassword({
-            email: targetEmail,
-            password: password
-          });
-          if (!retry.error && retry.data) {
-            data = retry.data;
-            error = null;
-          }
-        }
-      }
-
       if (error) {
-        // Supabase retornou erro de credenciais
         if (error.message.includes('Invalid login credentials') || error.message.includes('invalid_credentials')) {
-          const localResult = this.loginLocalFallback(cleanIdentifier, password);
-          if (localResult.success) return localResult;
           return { success: false, message: 'E-mail, login ou senha incorretos.' };
         }
-        console.warn('Erro Supabase Auth:', error.message);
-        return this.loginLocalFallback(cleanIdentifier, password);
+        if (error.message.includes('Email not confirmed')) {
+          return { success: false, message: 'E-mail ainda não confirmado no sistema.' };
+        }
+        return { success: false, message: error.message || 'Falha ao autenticar no Supabase.' };
       }
 
-      if (data.user) {
-        // Buscar perfil público associado
-        let profileData: any = null;
+      if (!data?.user || !data?.session) {
+        return { success: false, message: 'Falha ao obter sessão do Supabase.' };
+      }
 
-        // Tentar com o cliente normal primeiro
-        const { data: profile, error: profileErr } = await supabase
+      // 2. Buscar perfil público do usuário
+      let profileData: any = null;
+
+      const { data: profile, error: profileErr } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', data.user.id)
+        .single();
+
+      if (profile) {
+        profileData = profile;
+      } else if (supabaseAdmin) {
+        console.warn('Perfil não encontrado via anon key, buscando via admin...', profileErr?.message);
+        const { data: adminProfile } = await supabaseAdmin
           .from('profiles')
           .select('*')
           .eq('id', data.user.id)
           .single();
-
-        if (profile) {
-          profileData = profile;
-        } else {
-          // Perfil não encontrado via RLS — tentar com supabaseAdmin (bypassa RLS)
-          console.warn('Perfil não encontrado via anon key, tentando via admin...', profileErr?.message);
-          if (supabaseAdmin) {
-            const { data: adminProfile } = await supabaseAdmin
-              .from('profiles')
-              .select('*')
-              .eq('id', data.user.id)
-              .single();
-            profileData = adminProfile;
-          }
-        }
-
-        if (profileData) {
-          if (profileData.status === 'INACTIVE') {
-            await supabase.auth.signOut();
-            return { success: false, message: 'Sua conta está inativa. Entre em contato com o administrador.' };
-          }
-
-          // Atualizar último login
-          try {
-            const updateClient = supabaseAdmin || supabase;
-            await updateClient
-              .from('profiles')
-              .update({ last_login_at: new Date().toISOString() })
-              .eq('id', data.user.id);
-          } catch (_) {/* não bloquear o login por falha de update */}
-
-          const username = profileData.username || (data.user.user_metadata?.username as string) || undefined;
-
-          const appUser: User = {
-            id: profileData.id,
-            name: profileData.name,
-            email: profileData.email,
-            username: username,
-            passwordHash: hashPassword(password),
-            plainPassword: password,
-            role: profileData.role as UserRole,
-            status: profileData.status as UserStatus,
-            createdAt: profileData.created_at,
-            lastLoginAt: new Date().toISOString()
-          };
-
-          const session: AuthSession = {
-            user: appUser,
-            token: data.session?.access_token || `token_${appUser.id}`
-          };
-
-          this.saveLocalSession(session);
-          return { success: true, session };
-        } else {
-          await supabase.auth.signOut();
-          console.error('Usuário existe no auth.users mas não tem perfil na tabela profiles. ID:', data.user.id);
-          return {
-            success: false,
-            message: 'Seu cadastro está incompleto. Peça ao administrador para recriar seu perfil no painel.'
-          };
-        }
+        profileData = adminProfile;
       }
-    } catch (e) {
-      console.warn('Comunicação com Supabase falhou, recorrendo a credenciais locais:', e);
-      return this.loginLocalFallback(cleanIdentifier, password);
+
+      if (!profileData) {
+        await supabase.auth.signOut();
+        console.error('Usuário existe no auth.users mas não tem perfil na tabela profiles. ID:', data.user.id);
+        return {
+          success: false,
+          message: 'Cadastro incompleto. Peça ao administrador para verificar seu perfil.'
+        };
+      }
+
+      if (profileData.status === 'INACTIVE') {
+        await supabase.auth.signOut();
+        return { success: false, message: 'Sua conta está inativa. Entre em contato com o administrador.' };
+      }
+
+      // 3. Atualizar data de último login
+      try {
+        const updateClient = supabaseAdmin || supabase;
+        await updateClient
+          .from('profiles')
+          .update({ last_login_at: new Date().toISOString() })
+          .eq('id', data.user.id);
+      } catch (_) {
+        // Não bloquear o login se falhar atualização de metadata
+      }
+
+      const username = profileData.username || (data.user.user_metadata?.username as string) || undefined;
+
+      const appUser: User = {
+        id: profileData.id,
+        name: profileData.name,
+        email: profileData.email,
+        username: username,
+        passwordHash: hashPassword(password),
+        plainPassword: password,
+        role: profileData.role as UserRole,
+        status: profileData.status as UserStatus,
+        createdAt: profileData.created_at,
+        lastLoginAt: new Date().toISOString()
+      };
+
+      const session: AuthSession = {
+        user: appUser,
+        token: data.session.access_token
+      };
+
+      return { success: true, session };
+    } catch (e: any) {
+      console.error('Erro ao conectar ao Supabase Auth:', e);
+      return { success: false, message: 'Erro de comunicação com o servidor de autenticação. Verifique sua conexão.' };
     }
-
-    // 2. Fallback de Desenvolvimento / Credenciais Padrão
-    return this.loginLocalFallback(cleanIdentifier, password);
-  }
-
-  private loginLocalFallback(identifier: string, password: string): { success: boolean; session?: AuthSession; message?: string } {
-    let localUsers: User[] = [];
-    try {
-      const stored = localStorage.getItem(LOCAL_USERS_KEY);
-      if (stored) localUsers = JSON.parse(stored);
-    } catch (e) {
-      // ignore
-    }
-
-    if (localUsers.length === 0) {
-      localUsers = [
-        {
-          id: 'user_admin_001',
-          name: 'Administrador MBR',
-          email: 'admin@mbrtracker.com.br',
-          username: 'admin',
-          passwordHash: hashPassword('admin123'),
-          plainPassword: 'admin123',
-          role: 'ADMIN',
-          status: 'ACTIVE',
-          createdAt: new Date('2026-01-01T10:00:00.000Z').toISOString(),
-          lastLoginAt: null
-        },
-        {
-          id: 'user_demo_002',
-          name: 'Usuário Demonstração',
-          email: 'usuario@mbrtracker.com.br',
-          username: 'usuario',
-          passwordHash: hashPassword('user123'),
-          plainPassword: 'user123',
-          role: 'USER',
-          status: 'ACTIVE',
-          createdAt: new Date('2026-01-05T14:30:00.000Z').toISOString(),
-          lastLoginAt: null
-        }
-      ];
-    }
-
-    const clean = identifier.toLowerCase();
-    const user = localUsers.find(u => 
-      u.email.toLowerCase() === clean || 
-      (u.username && u.username.toLowerCase() === clean)
-    );
-
-    if (!user) {
-      return { success: false, message: 'E-mail, login ou senha incorretos.' };
-    }
-
-    if (user.status === 'INACTIVE') {
-      return { success: false, message: 'Sua conta está inativa. Entre em contato com o administrador do sistema.' };
-    }
-
-    if (user.passwordHash !== hashPassword(password)) {
-      return { success: false, message: 'E-mail, login ou senha incorretos.' };
-    }
-
-    user.lastLoginAt = new Date().toISOString();
-    const session: AuthSession = {
-      user: { ...user },
-      token: `token_${user.id}_${Date.now()}`
-    };
-
-    this.saveLocalSession(session);
-    return { success: true, session };
   }
 
   /**
-   * Efetuar Logout no Supabase Auth e limpar armazenamento local.
+   * Efetuar Logout no Supabase Auth.
    */
   public async logout(): Promise<void> {
     try {
       await supabase.auth.signOut();
     } catch (e) {
-      // ignore
+      console.warn('Erro ao deslogar do Supabase:', e);
     }
-    localStorage.removeItem(LOCAL_SESSION_KEY);
   }
 
   /**
-   * Recuperar sessão atual ativa.
+   * Recuperar sessão atual ativa validada pelo Supabase.
    */
   public async getCurrentSession(): Promise<AuthSession | null> {
     try {
       const { data } = await supabase.auth.getSession();
       if (data?.session?.user) {
+        let profileData: any = null;
+
         const { data: profile } = await supabase
           .from('profiles')
           .select('*')
           .eq('id', data.session.user.id)
           .single();
 
-        if (profile && profile.status === 'ACTIVE') {
+        if (profile) {
+          profileData = profile;
+        } else if (supabaseAdmin) {
+          const { data: adminProfile } = await supabaseAdmin
+            .from('profiles')
+            .select('*')
+            .eq('id', data.session.user.id)
+            .single();
+          profileData = adminProfile;
+        }
+
+        if (profileData && profileData.status === 'ACTIVE') {
           const appUser: User = {
-            id: profile.id,
-            name: profile.name,
-            email: profile.email,
-            username: profile.username || (data.session.user.user_metadata?.username as string) || undefined,
+            id: profileData.id,
+            name: profileData.name,
+            email: profileData.email,
+            username: profileData.username || (data.session.user.user_metadata?.username as string) || undefined,
             passwordHash: '',
-            role: profile.role as UserRole,
-            status: profile.status as UserStatus,
-            createdAt: profile.created_at,
-            lastLoginAt: profile.last_login_at
+            role: profileData.role as UserRole,
+            status: profileData.status as UserStatus,
+            createdAt: profileData.created_at,
+            lastLoginAt: profileData.last_login_at
           };
 
           return {
@@ -334,33 +228,23 @@ class AuthService {
         }
       }
     } catch (e) {
-      // fallback
+      console.warn('Erro ao obter sessão ativa:', e);
     }
 
-    // Local Session Fallback
-    try {
-      const stored = localStorage.getItem(LOCAL_SESSION_KEY);
-      if (!stored) return null;
-      return JSON.parse(stored);
-    } catch {
-      return null;
-    }
+    return null;
   }
 
   /**
-   * Buscar todos os usuários cadastrados (Exclusivo para o Painel Administrador).
-   * Usa supabaseAdmin para bypassar o RLS e mesclar metadados de autenticação se necessário.
+   * Buscar todos os usuários cadastrados no Supabase (Exclusivo para o Painel Administrador).
    */
   public async getUsers(): Promise<User[]> {
     const client = supabaseAdmin || supabase;
     try {
-      // 1. Buscar perfis na tabela profiles
       const { data: profiles, error } = await client
         .from('profiles')
         .select('*')
         .order('created_at', { ascending: false });
 
-      // 2. Se temos supabaseAdmin, buscar auth.users para garantir sincronização do username
       let authUsersMap: Record<string, any> = {};
       if (supabaseAdmin) {
         try {
@@ -397,13 +281,6 @@ class AuthService {
       console.warn('Erro ao consultar profiles:', e);
     }
 
-    // Fallback local
-    try {
-      const stored = localStorage.getItem(LOCAL_USERS_KEY);
-      if (stored) return JSON.parse(stored);
-    } catch {
-      // ignore
-    }
     return [];
   }
 
@@ -424,7 +301,6 @@ class AuthService {
     // ── Caminho 1: Admin API (service_role key disponível) ──────────────────
     if (supabaseAdmin) {
       try {
-        // Verificar se o username já está em uso se fornecido
         if (cleanUsername) {
           const { data: existingUser } = await supabaseAdmin
             .from('profiles')
@@ -453,7 +329,6 @@ class AuthService {
         }
 
         if (authData.user) {
-          // Upsert no profile com username
           const profilePayload: any = {
             id: authData.user.id,
             name: data.name,
@@ -471,9 +346,8 @@ class AuthService {
             .from('profiles')
             .upsert(profilePayload);
 
-          // Se der erro por coluna username inexistente, tentar sem username
           if (profileError && profileError.message.includes('username')) {
-            console.warn('Coluna username ainda não criada em profiles, criando sem username na tabela:', profileError.message);
+            console.warn('Coluna username inexistente na tabela profiles, inserindo sem username:', profileError.message);
             delete profilePayload.username;
             await supabaseAdmin.from('profiles').upsert(profilePayload);
           }
@@ -494,14 +368,13 @@ class AuthService {
           return { success: true, user: newUser };
         }
       } catch (e: any) {
-        return { success: false, message: e?.message || 'Erro ao criar usuário via Admin API.' };
+        return { success: false, message: e?.message || 'Erro ao criar usuário no Supabase.' };
       }
 
       return { success: false, message: 'Erro desconhecido ao criar usuário.' };
     }
 
-    // ── Caminho 2: Fallback — sem service_role key ─
-    console.warn('AVISO: VITE_SUPABASE_SERVICE_ROLE_KEY não configurada. Usando signUp() como fallback.');
+    // ── Caminho 2: Fallback padrão com supabase.auth.signUp ─
     try {
       const { data: authData, error } = await supabase.auth.signUp({
         email: cleanEmail,
@@ -560,7 +433,7 @@ class AuthService {
   }
 
   /**
-   * Atualizar dados de um usuário (Nome, E-mail, Login/Username, Role, Status, Senha)
+   * Atualizar dados de um usuário (Nome, E-mail, Login/Username, Role, Status, Senha) exclusivamente no Supabase.
    */
   public async updateUser(
     id: string,
@@ -579,7 +452,6 @@ class AuthService {
         ? (updates.username.trim().toLowerCase().replace(/\s+/g, '') || null) 
         : undefined;
 
-      // Verificar unicidade de username se alterado
       if (cleanUsername && supabaseAdmin) {
         const { data: existingUser } = await supabaseAdmin
           .from('profiles')
@@ -605,7 +477,6 @@ class AuthService {
         .update(payload)
         .eq('id', id);
 
-      // Se der erro por coluna username inexistente, tentar sem username no update de profiles
       if (error && error.message.includes('username')) {
         delete payload.username;
         const retry = await client.from('profiles').update(payload).eq('id', id);
@@ -616,7 +487,7 @@ class AuthService {
         return { success: false, message: error.message };
       }
 
-      // Atualizar no Supabase Auth caso senha, e-mail ou username sejam alterados
+      // Atualizar no Supabase Auth (senha, e-mail ou metadados de nome/role/username)
       if (supabaseAdmin) {
         const authUpdates: any = {};
         if (updates.password) authUpdates.password = updates.password;
@@ -625,7 +496,6 @@ class AuthService {
           authUpdates.email_confirm = true;
         }
 
-        // Buscar metadados atuais do usuário
         const { data: authUserData } = await supabaseAdmin.auth.admin.getUserById(id);
         const currentMeta = authUserData?.user?.user_metadata || {};
 
@@ -644,7 +514,7 @@ class AuthService {
 
       return { success: true };
     } catch (e: any) {
-      return { success: false, message: e?.message || 'Erro ao atualizar dados.' };
+      return { success: false, message: e?.message || 'Erro ao atualizar dados no Supabase.' };
     }
   }
 
@@ -670,17 +540,9 @@ class AuthService {
         if (error) return { success: false, message: error.message };
       }
 
-      return { success: true, message: 'Usuário excluído com sucesso.' };
+      return { success: true, message: 'Usuário excluído com sucesso do Supabase.' };
     } catch (e: any) {
       return { success: false, message: e?.message || 'Erro ao excluir usuário.' };
-    }
-  }
-
-  private saveLocalSession(session: AuthSession): void {
-    try {
-      localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(session));
-    } catch (e) {
-      // ignore
     }
   }
 }
