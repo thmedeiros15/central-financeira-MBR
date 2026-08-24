@@ -23,6 +23,40 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS username TEXT UNIQUE;
 CREATE INDEX IF NOT EXISTS idx_profiles_username ON public.profiles(LOWER(username));
 
+-- Função RPC de resolução de e-mail por username (permite que anônimos façam login usando username)
+CREATE OR REPLACE FUNCTION public.get_email_by_identifier(login_identifier TEXT)
+RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  resolved_email TEXT;
+BEGIN
+  IF POSITION('@' IN login_identifier) > 0 THEN
+    RETURN LOWER(TRIM(login_identifier));
+  END IF;
+
+  SELECT email INTO resolved_email
+  FROM public.profiles
+  WHERE LOWER(username) = LOWER(TRIM(login_identifier))
+  LIMIT 1;
+
+  IF resolved_email IS NOT NULL THEN
+    RETURN resolved_email;
+  END IF;
+
+  SELECT email INTO resolved_email
+  FROM auth.users
+  WHERE LOWER(raw_user_meta_data->>'username') = LOWER(TRIM(login_identifier))
+  LIMIT 1;
+
+  RETURN resolved_email;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_email_by_identifier(TEXT) TO anon, authenticated;
+
 -- ==============================================================================
 -- FUNÇÕES SECURITY DEFINER PARA EVITAR RECURSÃO INFINITA NAS POLICIES
 -- ==============================================================================

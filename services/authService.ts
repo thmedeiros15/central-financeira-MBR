@@ -27,23 +27,37 @@ class AuthService {
     if (!cleanIdentifier.includes('@')) {
       let resolvedEmail: string | null = null;
 
-      // 1. Tentar buscar pelo username na tabela profiles
+      // 1. Tentar resolver via RPC do Supabase (funciona para anônimos no frontend de produção)
       try {
-        const client = supabaseAdmin || supabase;
-        const { data: profile } = await client
-          .from('profiles')
-          .select('email, username')
-          .ilike('username', cleanIdentifier)
-          .maybeSingle();
-
-        if (profile?.email) {
-          resolvedEmail = profile.email.toLowerCase();
+        const { data: rpcEmail } = await supabase.rpc('get_email_by_identifier', {
+          login_identifier: cleanIdentifier
+        });
+        if (rpcEmail && typeof rpcEmail === 'string' && rpcEmail.includes('@')) {
+          resolvedEmail = rpcEmail.toLowerCase();
         }
       } catch (_) {
-        // Ignorar erro se coluna username ainda não existir
+        // ignore se RPC ainda não foi criada no Supabase
       }
 
-      // 2. Se não encontrou em profiles e temos supabaseAdmin, buscar nos metadados de auth.users
+      // 2. Tentar buscar pelo username na tabela profiles
+      if (!resolvedEmail) {
+        try {
+          const client = supabaseAdmin || supabase;
+          const { data: profile } = await client
+            .from('profiles')
+            .select('email, username')
+            .ilike('username', cleanIdentifier)
+            .maybeSingle();
+
+          if (profile?.email) {
+            resolvedEmail = profile.email.toLowerCase();
+          }
+        } catch (_) {
+          // Ignorar erro se coluna username ainda não existir
+        }
+      }
+
+      // 3. Se não encontrou em profiles e temos supabaseAdmin, buscar nos metadados de auth.users
       if (!resolvedEmail && supabaseAdmin) {
         try {
           const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
